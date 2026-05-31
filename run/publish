@@ -1,8 +1,18 @@
 #!/usr/bin/env bash
-# Full publish pipeline: download upstream wheels, collect local builds,
-# rename to pyrealsense2-extended, twine check, twine upload, git tag.
+# Publish pipeline (download upstream wheels, collect local aarch64 builds,
+# rename to pyrealsense2-extended, twine check, twine upload).
+#
+# Reproducible entry point. Run the exact same thing locally or in CI:
+#
+#   nix run .#publish          # uses the flake-pinned python + twine
+#
+# Requirements:
+#   - wheelhouse/ must already contain the aarch64 manylinux wheels
+#     (build them with ./run/build — Docker/manylinux, not nix).
+#   - PyPI credentials via env: TWINE_USERNAME=__token__ TWINE_PASSWORD=pypi-...
+#     (or ~/.pypirc). Set PUBLISH_SKIP_UPLOAD=1 to stop before uploading.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(git rev-parse --show-toplevel)"
 
 echo "=== Step 1: Download upstream wheels + collect local aarch64 ==="
 python3 download_wheels.py
@@ -22,14 +32,17 @@ echo ""
 echo "=== Step 3: Validate with twine check ==="
 python3 -m twine check "${WHEELS[@]}"
 
+if [[ "${PUBLISH_SKIP_UPLOAD:-}" == "1" ]]; then
+    echo ""
+    echo "PUBLISH_SKIP_UPLOAD=1 set — stopping before upload."
+    echo "Wheels ready in renamed_wheels/:"
+    printf '  %s\n' "${WHEELS[@]}"
+    exit 0
+fi
+
 echo ""
 echo "=== Step 4: Upload to PyPI ==="
-python3 -m twine upload "${WHEELS[@]}"
-
-VERSION=$(python3 -c "import re; print(re.search(r'^version\s*=\s*\"([^\"]+)\"', open('pyproject.toml').read(), re.M).group(1))")
-echo ""
-echo "=== Step 5: Git tag v$VERSION ==="
-git tag "v$VERSION" 2>/dev/null && git push origin "v$VERSION" 2>/dev/null || echo "  (tag exists or no remote)"
+python3 -m twine upload --non-interactive --verbose --skip-existing "${WHEELS[@]}"
 
 echo ""
 echo "Done!"

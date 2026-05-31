@@ -20,6 +20,11 @@ PYPI_PACKAGE = "pyrealsense2"
 # Optional substring filter — set to e.g. ["cp312", "cp313"] to limit. [] = no filter.
 PYTHON_VERSION_FILTER: list[str] = []
 
+# We build ALL Linux aarch64 wheels ourselves (manylinux2014, glibc 2.17) so they
+# run on Jetsons. Upstream aarch64 wheels are skipped: some require glibc 2.34/2.38
+# which Jetsons (glibc 2.31) don't have. Matches the tag substring in filenames.
+SKIP_UPSTREAM_TAGS = ["aarch64"]
+
 OUTPUT_DIR = Path("wheels_input")
 
 

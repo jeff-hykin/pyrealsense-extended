@@ -134,6 +134,18 @@
         defaultPython = pythonVersions."312";
         defaultPythonPackages = defaultPython.pkgs;
 
+        # Python with the tools the publish pipeline needs (so `python3 -m twine`
+        # works). download_wheels.py / rename_wheel.py use only the stdlib.
+        publishPython = defaultPython.withPackages (ps: [ ps.twine ps.build ]);
+
+        # The single reproducible publish command. Wraps run/publish with a
+        # pinned python+twine so `nix run .#publish` is identical locally and in CI.
+        publishApp = pkgs.writeShellApplication {
+          name = "publish";
+          runtimeInputs = [ publishPython pkgs.git ];
+          text = builtins.readFile ./run/publish;
+        };
+
       in {
         packages = {
           librealsense-cpp = librealsense-cpp;
@@ -145,6 +157,12 @@
           pyrealsense2-wheel = wheelPackages."312";
           default = wheelPackages."312";
         };
+
+        apps.publish = {
+          type = "app";
+          program = "${publishApp}/bin/publish";
+        };
+        apps.default = self.apps.${system}.publish;
 
         devShells.default = pkgs.mkShell {
           packages = [

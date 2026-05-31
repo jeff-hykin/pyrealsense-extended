@@ -1,0 +1,40 @@
+name: Build and Publish
+
+# Builds the Linux aarch64 wheels on a native ARM runner, downloads the
+# x86_64/Windows wheels from upstream PyPI, renames everything to
+# pyrealsense2-extended, and uploads to PyPI.
+#
+# This replicates exactly what `nix run .#publish` does locally — the only
+# extra step is building the aarch64 wheels first (./run/build, Docker/manylinux).
+#
+# Trigger manually from the Actions tab (workflow_dispatch).
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_upload:
+        description: "Build + rename only, skip the PyPI upload"
+        type: boolean
+        default: false
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Build aarch64 manylinux wheels
+        run: PYTHONS="cp39 cp310 cp311 cp312 cp313 cp314" ./run/build
+
+      - name: List built wheels
+        run: ls -lh wheelhouse/
+
+      - name: Download upstream + rename + publish
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+          PUBLISH_SKIP_UPLOAD: ${{ inputs.skip_upload && '1' || '' }}
+        run: nix run .#publish
