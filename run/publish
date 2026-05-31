@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Full publish pipeline: download upstream wheels, collect local builds,
+# rename to pyrealsense2-extended, twine check, twine upload, git tag.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+echo "=== Step 1: Download upstream wheels + collect local aarch64 ==="
+python3 download_wheels.py
+
+echo ""
+echo "=== Step 2: Rename all wheels to pyrealsense2-extended ==="
+rm -rf renamed_wheels
+python3 rename_wheel.py
+
+WHEELS=( renamed_wheels/*.whl )
+if [[ ${#WHEELS[@]} -eq 0 || ! -f "${WHEELS[0]}" ]]; then
+    echo "ERROR: No wheels in renamed_wheels/. Did rename step fail?" >&2
+    exit 1
+fi
+
+echo ""
+echo "=== Step 3: Validate with twine check ==="
+python3 -m twine check "${WHEELS[@]}"
+
+echo ""
+echo "=== Step 4: Upload to PyPI ==="
+python3 -m twine upload "${WHEELS[@]}"
+
+VERSION=$(python3 -c "import re; print(re.search(r'^version\s*=\s*\"([^\"]+)\"', open('pyproject.toml').read(), re.M).group(1))")
+echo ""
+echo "=== Step 5: Git tag v$VERSION ==="
+git tag "v$VERSION" 2>/dev/null && git push origin "v$VERSION" 2>/dev/null || echo "  (tag exists or no remote)"
+
+echo ""
+echo "Done!"

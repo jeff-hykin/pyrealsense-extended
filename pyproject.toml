@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyrealsense2-extended"
+version = "2.58.1.10581.post1"
+description = "Intel RealSense SDK 2.0 Python wrapper — pre-built wheels for all platforms (incl. Linux aarch64 / Jetson)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+authors = [
+    {name = "Community Contributor"}
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Scientific/Engineering",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+]
+keywords = ["realsense", "librealsense", "depth", "camera", "3d", "jetson", "aarch64"]
+
+[project.urls]
+Homepage = "https://github.com/IntelRealSense/librealsense"
+Repository = "https://github.com/jeff-hykin/pyrealsense-extended"
+Upstream = "https://pypi.org/project/pyrealsense2/"
+
+[tool.setuptools]
+packages = ["pyrealsense2_extended"]

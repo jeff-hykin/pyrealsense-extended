@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Download pyrealsense2 wheels from PyPI + collect local aarch64 builds
+set -euo pipefail
+cd "$(dirname "$0")/.."
+python3 download_wheels.py "$@"

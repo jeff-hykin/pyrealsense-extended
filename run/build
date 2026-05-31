@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# Build pyrealsense2 Linux aarch64 wheels for Python versions missing from upstream.
+#
+# Upstream has aarch64 wheels only for cp39/cp310/cp312. This builds cp311, cp313, cp314.
+#
+# Uses the manylinux2014_aarch64 Docker image directly. The build flow:
+#   1. cmake builds librealsense C++ library + pybind11 Python bindings
+#   2. find_librs_version.py generates _version.py
+#   3. hatchling packages the .so + _version.py into a wheel
+#   4. auditwheel bundles shared libs into the wheel for portability
+#
+# Three modes (auto-detected, or override with $BUILD_MODE):
+#   - native    : Running on Linux aarch64 (Jetson, Ampere). Fastest.
+#   - docker    : Running on x86_64 with Docker + qemu. Slow.
+#   - macos     : Running on macOS with Docker Desktop + binfmt. Slow.
+#
+# Usage:
+#   ./run/build                # all missing python versions (cp311 cp313 cp314)
+#   ./run/build cp311          # one version
+#   PYTHONS="cp311 cp313" ./run/build
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+UPSTREAM_REPO="https://github.com/IntelRealSense/librealsense.git"
+UPSTREAM_TAG="v2.58.1"
+UPSTREAM_VERSION="2.58.1.10581"
+WORK_DIR=".build-work"
+MANYLINUX_IMAGE="quay.io/pypa/manylinux2014_aarch64"
+
+PYTHONS="${PYTHONS:-${*:-cp311 cp313 cp314}}"
+
+# Detect mode
+detect_mode() {
+    if [[ "${BUILD_MODE:-}" != "" ]]; then
+        echo "$BUILD_MODE"
+        return
+    fi
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        echo "macos"
+    elif [[ "$(uname -m)" == "aarch64" || "$(uname -m)" == "arm64" ]] && [[ "$(uname -s)" == "Linux" ]]; then
+        echo "native"
+    else
+        echo "docker"
+    fi
+}
+
+MODE="$(detect_mode)"
+echo "=== Build mode: $MODE ==="
+echo "=== Python versions: $PYTHONS ==="
+
+# Clone librealsense source if not already present
+if [[ ! -d "$WORK_DIR/librealsense" ]]; then
+    mkdir -p "$WORK_DIR"
+    echo "=== Cloning librealsense ($UPSTREAM_TAG) ==="
+    git clone --depth 1 --branch "$UPSTREAM_TAG" "$UPSTREAM_REPO" "$WORK_DIR/librealsense" || {
+        echo "Tag $UPSTREAM_TAG not found, falling back to master"
+        git clone --depth 1 "$UPSTREAM_REPO" "$WORK_DIR/librealsense"
+    }
+else
+    echo "=== Using cached librealsense source in $WORK_DIR/librealsense ==="
+fi
+
+mkdir -p wheelhouse
+
+# Register binfmt for cross-architecture emulation if needed
+if [[ "$MODE" == "docker" || "$MODE" == "macos" ]]; then
+    echo "=== Registering binfmt for aarch64 emulation ==="
+    docker run --privileged --rm tonistiigi/binfmt --install arm64 || {
+        echo "WARNING: binfmt registration failed. Build may not work."
+        echo "On macOS, ensure Docker Desktop is running."
+    }
+fi
+
+# Write the build script that runs inside the manylinux container
+cat > "$WORK_DIR/build_inside.sh" << 'INNEREOF'
+#!/bin/bash
+set -euo pipefail
+
+# Install system dependencies
+# cmake is already available via pipx in manylinux2014
+# systemd-devel provides libudev.h (needed by bundled libusb)
+echo "=== Installing system dependencies ==="
+yum install -y libusb1-devel systemd-devel || true
+
+SRC_DIR=/work/librealsense
+
+# Patch cmake to not require Development.Embed (manylinux Python is statically compiled,
+# no libpython.so exists). Extension modules only need Development.Module.
+sed -i 's/find_package(Python REQUIRED COMPONENTS Interpreter Development)/find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)/' \
+    "$SRC_DIR/CMake/external_pybind11.cmake"
+# Also patch the PYTHON_INSTALL_DIR line that uses Python_SITEARCH (needs Interpreter to work)
+sed -i 's/set( PYTHON_INSTALL_DIR "${Python_SITEARCH}\/pyrealsense2"/set( PYTHON_INSTALL_DIR "${Python_SITELIB}\/pyrealsense2"/' \
+    "$SRC_DIR/CMake/external_pybind11.cmake" 2>/dev/null || true
+
+for PYVER in $PYTHONS; do
+    # Map cpXXX to /opt/python/cpXXX-cpXXX/bin
+    PYBIN="/opt/python/${PYVER}-${PYVER}/bin"
+    if [[ ! -d "$PYBIN" ]]; then
+        echo "WARNING: Skipping $PYVER — not found in manylinux image"
+        continue
+    fi
+
+    echo ""
+    echo "============================================================"
+    echo "Building for $PYVER (${PYBIN}/python)"
+    echo "============================================================"
+
+    BUILD_DIR="/work/build_${PYVER}"
+    rm -rf "$BUILD_DIR"
+    mkdir -p "$BUILD_DIR"
+    cd "$BUILD_DIR"
+
+    # Resolve the real Python prefix (manylinux symlinks /opt/python/cpXXX-cpXXX → /opt/_internal/cpython-X.Y.Z)
+    PY_PREFIX="$(${PYBIN}/python -c 'import sys; print(sys.prefix)')"
+    PY_INCLUDE="$(${PYBIN}/python -c 'import sysconfig; print(sysconfig.get_path("include"))')"
+    PY_LIBDIR="$(${PYBIN}/python -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')"
+
+    # Step 1: cmake configure + build
+    cmake "$SRC_DIR" \
+        -DBUILD_PYTHON_BINDINGS=ON \
+        -DPYTHON_EXECUTABLE="${PYBIN}/python" \
+        -DPython_ROOT_DIR="${PY_PREFIX}" \
+        -DPython_EXECUTABLE="${PYBIN}/python" \
+        -DPython_INCLUDE_DIR="${PY_INCLUDE}" \
+        -DPython_LIBRARY="${PY_LIBDIR}" \
+        -DPython_FIND_STRATEGY=LOCATION \
+        -DBUILD_EXAMPLES=OFF \
+        -DBUILD_GRAPHICAL_EXAMPLES=OFF \
+        -DFORCE_RSUSB_BACKEND=ON \
+        -DBUILD_SHARED_LIBS=ON \
+        -DBUILD_LEGACY_PYBACKEND=OFF \
+        -DCMAKE_BUILD_TYPE=Release
+
+    make -j"$(nproc)"
+
+    # Step 2: Generate _version.py
+    "${PYBIN}/python" "$SRC_DIR/wrappers/python/find_librs_version.py" "$SRC_DIR" "$SRC_DIR/wrappers/python/pyrealsense2"
+
+    # Step 3: Copy built .so files into the Python package source tree
+    find . -name "pyrealsense2*.so" -exec cp {} "$SRC_DIR/wrappers/python/pyrealsense2/" \;
+    find . -name "pyrsutils*.so" -exec cp {} "$SRC_DIR/wrappers/python/pyrealsense2/" \;
+
+    # Step 4: Build the wheel with hatchling
+    cd "$SRC_DIR/wrappers/python"
+    "${PYBIN}/pip" install --quiet hatchling build
+    "${PYBIN}/python" -m build --wheel --outdir /work/wheelhouse_raw/
+
+    # Clean up .so and _version.py from source tree for next iteration
+    rm -f pyrealsense2/*.so pyrealsense2/_version.py
+
+    cd /work
+done
+
+# Step 5: auditwheel repair all wheels to bundle shared libraries
+echo ""
+echo "=== Running auditwheel repair ==="
+# Use whichever Python is available for auditwheel
+AUDIT_PYBIN="$(ls -d /opt/python/cp31*-cp31*/bin 2>/dev/null | tail -1)"
+if [[ -z "$AUDIT_PYBIN" ]]; then
+    AUDIT_PYBIN="$(ls -d /opt/python/cp3*-cp3*/bin 2>/dev/null | tail -1)"
+fi
+"${AUDIT_PYBIN}/pip" install --quiet auditwheel
+for whl in /work/wheelhouse_raw/*.whl; do
+    echo "  Repairing $(basename "$whl") ..."
+    "${AUDIT_PYBIN}/auditwheel" repair "$whl" --plat manylinux2014_aarch64 -w /work/wheelhouse/ || {
+        echo "  WARNING: auditwheel repair failed for $(basename "$whl"), copying as-is"
+        cp "$whl" /work/wheelhouse/
+    }
+done
+
+echo ""
+echo "=== Built wheels ==="
+ls -lh /work/wheelhouse/*.whl 2>/dev/null || echo "No wheels produced"
+INNEREOF
+
+chmod +x "$WORK_DIR/build_inside.sh"
+
+# Run the build
+if [[ "$MODE" == "native" ]]; then
+    # Native aarch64 — run directly in Docker without qemu
+    echo "=== Running native aarch64 build in manylinux container ==="
+    docker run --rm \
+        -v "$(pwd)/$WORK_DIR:/work" \
+        -v "$(pwd)/wheelhouse:/work/wheelhouse" \
+        -e "PYTHONS=$PYTHONS" \
+        "$MANYLINUX_IMAGE" \
+        bash /work/build_inside.sh
+elif [[ "$MODE" == "docker" || "$MODE" == "macos" ]]; then
+    # Cross-build via qemu emulation
+    echo "=== Running cross-build (qemu emulation) in manylinux container ==="
+    echo "  This will be slow (10-30x). Consider using a native aarch64 machine."
+    docker run --rm --platform linux/arm64 \
+        -v "$(pwd)/$WORK_DIR:/work" \
+        -v "$(pwd)/wheelhouse:/work/wheelhouse" \
+        -e "PYTHONS=$PYTHONS" \
+        "$MANYLINUX_IMAGE" \
+        bash /work/build_inside.sh
+fi
+
+echo ""
+echo "=== Done ==="
+ls -lh wheelhouse/*.whl 2>/dev/null || echo "No wheels in wheelhouse/"

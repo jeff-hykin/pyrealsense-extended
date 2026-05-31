@@ -1,0 +1,8 @@
+wheels_input/
+renamed_wheels/
+wheelhouse/
+.cibuildwheel-work/
+dist/
+*.egg-info/
+__pycache__/
+.build-work
