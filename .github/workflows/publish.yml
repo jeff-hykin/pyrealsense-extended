@@ -10,7 +10,15 @@ name: Build and Publish
 # Trigger manually from the Actions tab (workflow_dispatch).
 
 on:
+  # Manual fallback — trigger from the Actions tab.
   workflow_dispatch:
+    inputs:
+      skip_upload:
+        description: "Build + rename only, skip the PyPI upload"
+        type: boolean
+        default: false
+  # Reusable — called by auto-update.yml when upstream publishes a new version.
+  workflow_call:
     inputs:
       skip_upload:
         description: "Build + rename only, skip the PyPI upload"

@@ -22,8 +22,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 UPSTREAM_REPO="https://github.com/IntelRealSense/librealsense.git"
-UPSTREAM_TAG="v2.58.1"
-UPSTREAM_VERSION="2.58.1.10581"
+# Pulled from upstream PyPI (pyrealsense2) so we track new releases automatically.
+# Pin by exporting UPSTREAM_VERSION / UPSTREAM_TAG to reproduce an exact build.
+export UPSTREAM_VERSION="${UPSTREAM_VERSION:-$(python3 run/upstream_version.py)}"
+UPSTREAM_TAG="${UPSTREAM_TAG:-$(python3 run/upstream_version.py --tag)}"
 WORK_DIR=".build-work"
 MANYLINUX_IMAGE="quay.io/pypa/manylinux2014_aarch64"
 

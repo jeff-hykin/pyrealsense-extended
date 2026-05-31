@@ -27,6 +27,19 @@ KNOWN_DIST_NAMES = {"pyrealsense2"}
 
 
 def get_target_version():
+    # 1. Explicit override (run/publish exports this so build + rename agree).
+    env = os.environ.get("TARGET_VERSION")
+    if env:
+        return env
+    # 2. Pull from upstream PyPI so we track new pyrealsense2 releases.
+    try:
+        sys.path.insert(0, str(Path(__file__).parent / "run"))
+        from upstream_version import target_version
+        return target_version()
+    except Exception as e:
+        print(f"WARNING: could not derive version from upstream ({e}); "
+              f"falling back to pyproject.toml")
+    # 3. Last-resort fallback: whatever is pinned in pyproject.toml.
     pyproject = Path(__file__).parent / "pyproject.toml"
     if not pyproject.exists():
         print("ERROR: pyproject.toml not found")
