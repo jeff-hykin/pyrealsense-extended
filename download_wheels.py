@@ -66,6 +66,10 @@ def download_pypi_wheels(package_name, output_dir):
                 print(f"  Skipping {filename} (filtered)")
                 continue
 
+        if any(tag in filename for tag in SKIP_UPSTREAM_TAGS):
+            print(f"  Skipping {filename} (built locally instead)")
+            continue
+
         dest = output_dir / filename
         if dest.exists():
             print(f"  Already exists: {filename}")
